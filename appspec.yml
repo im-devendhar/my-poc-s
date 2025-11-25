@@ -1,0 +1,19 @@
+
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /home/ubuntu/nodejs-app
+hooks:
+  BeforeInstall:
+    - location: scripts/set_permissions.sh
+      timeout: 300
+      runas: ubuntu
+  AfterInstall:
+    - location: scripts/install_dependencies.sh
+      timeout: 300
+      runas: ubuntu
+  ApplicationStart:
+    - location: scripts/start_server.sh
+      timeout: 300
+
