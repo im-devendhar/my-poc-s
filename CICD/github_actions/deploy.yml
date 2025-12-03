@@ -1,77 +1,39 @@
-name: CD - Deploy static site to EC2
+
+name: Deploy HTML to EC2
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches:
+      - main
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    env:
-      TARGET_DIR: ${{ secrets.EC2_TARGET_DIR || '/var/www/html' }}
+    # Optionally target a specific runner label you set on your EC2 runner (e.g., 'ec2')
+    runs-on: self-hosted
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent and add private key
-        uses: webfactory/ssh-agent@v0.8.1
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
-
-      - name: Prepare env vars
+      - name: Deploy to Apache Web Root
         run: |
-          echo "EC2_HOST=${{ secrets.EC2_HOST }}" >> $GITHUB_ENV
-          echo "EC2_USER=${{ secrets.EC2_USER }}" >> $GITHUB_ENV
-          # set SSH_PORT default to 22 if not provided
-          echo "EC2_SSH_PORT=${{ secrets.EC2_SSH_PORT }}" >> $GITHUB_ENV
-        shell: bash
+          # Ensure Apache exists (safe if already installed)
+          if ! command -v apache2 >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y apache2
+            sudo systemctl enable apache2
+            sudo systemctl start apache2
+          fi
 
-      - name: Show files to deploy
-        run: |
-          echo "Repository files:"
-          ls -la
-          echo "Will deploy index.html and static files (exclude .git)."
+          # Clean old content
+          sudo rm -rf /var/www/html/*
 
-      - name: Rsync files to remote user's home (site-deploy)
-        env:
-          SSH_HOST: ${{ secrets.EC2_HOST }}
-          SSH_USER: ${{ secrets.EC2_USER }}
-          SSH_PORT: ${{ secrets.EC2_SSH_PORT }}
-        run: |
-          # default port
-          SSH_PORT=${SSH_PORT:-22}
-          echo "rsync -> $SSH_USER@$SSH_HOST (port $SSH_PORT)"
-          # create remote tmp dir and copy (exclude .git)
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no -p ${SSH_PORT}" --delete --exclude='.git' ./ ${SSH_USER}@${SSH_HOST}:/home/${SSH_USER}/site-deploy/
+          # Copy repo contents (adjust if your site is in a subfolder)
+          sudo cp -r ./* /var/www/html/
 
-      - name: Move files into webroot on remote with sudo
-        env:
-          SSH_HOST: ${{ secrets.EC2_HOST }}
-          SSH_USER: ${{ secrets.EC2_USER }}
-          SSH_PORT: ${{ secrets.EC2_SSH_PORT }}
-          TARGET_DIR: ${{ secrets.EC2_TARGET_DIR || '/var/www/html' }}
-        run: |
-          SSH_PORT=${SSH_PORT:-22}
-          ssh -o StrictHostKeyChecking=no -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST} bash -s <<'EOF'
-            set -e
-            echo "Creating target dir if missing: ${TARGET_DIR}"
-            sudo mkdir -p "${TARGET_DIR}"
-            echo "Syncing files from /home/${SSH_USER}/site-deploy/ into ${TARGET_DIR}"
-            sudo rsync -av --delete /home/${SSH_USER}/site-deploy/ "${TARGET_DIR}/"
-            # set permissions for common web users
-            if id www-data >/dev/null 2>&1; then
-              sudo chown -R www-data:www-data "${TARGET_DIR}"
-            elif id apache >/dev/null 2>&1; then
-              sudo chown -R apache:apache "${TARGET_DIR}"
-            else
-              sudo chown -R root:root "${TARGET_DIR}"
-            fi
-            # restart web server (try nginx and apache)
-            if command -v systemctl >/dev/null 2>&1; then
-              sudo systemctl restart nginx || true
-              sudo systemctl restart apache2 || true
-              sudo systemctl restart httpd || true
-            fi
-            echo "Deploy complete."
-          EOF
+          # (Optional) Set correct ownership and perms for Apache to serve
+          sudo chown -R www-data:www-data /var/www/html
+          sudo find /var/www/html -type d -exec chmod 755 {} \;
+          sudo find /var/www/html -type f -exec chmod 644 {} \;
+
+          # (Optional) Restart Apache if needed
+          sudo systemctl restart apache2
